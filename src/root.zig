@@ -31,6 +31,12 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
     var zon_stack: ZonStack = try .initCapacity(alloc, zon_stack_capacity);
     defer zon_stack.deinit(alloc);
     var in_string = false;
+    var in_number = false;
+    //    // needing this buff is so bad, but we have to check for invalid keys or escape needed key.
+    //    // should just read ahead tbh.
+    //    var buff_key: ArrayList(u8) = try .initCapacity(alloc, 128);
+    //    defer buff_key.deinit(alloc);
+    var reading_buff_key = false;
     // TODO just a ScannerReader struct here ?
     scanner.feedInput(reader.buffered());
     reader.tossBuffered();
@@ -58,7 +64,123 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 else => {
                     in_string = false;
                     try zon_writer.writer.writeByte('\"');
+                    if (reading_buff_key) {
+                        if (reading_buff_key) unreachable("unimplemented, should just refactor all serializer");
+                        //        reading_buff_key = false;
+                        //        zon_stack.getLast().@"struct".fieldPrefix(buff_key.items);
+                        //        buff_key.clearRetainingCapacity();
+                    }
                 },
+            };
+        if (in_number)
+            switch (token) {
+                .partial_number => {},
+                else => {
+                    in_number = false;
+                },
+            };
+
+        switch (token) {
+            .object_begin => {},
+            .array_begin => {},
+            .object_end => {
+                if (zon_stack.pop()) |*last| {
+                    // TODO lib error
+                    if (last.* != .@"struct")
+                        return std.json.Error.SyntaxError;
+                    // TODO end fn should be on const in the first place
+                    try @constCast(&last.@"struct").end();
+                    // TODO lib error
+                } else return std.json.Error.SyntaxError;
+                continue;
+            },
+            .array_end => {
+                if (zon_stack.pop()) |*last| {
+                    if (last.* != .tuple)
+                        return std.json.Error.SyntaxError;
+                    try @constCast(&last.tuple).end();
+                } else return std.json.Error.SyntaxError;
+                continue;
+            },
+            .partial_number => |slice| {
+                // TODO validate number ?  would need number buffer
+                // zon nb supposedly same as json?
+                if (in_number) {
+                    try zon_writer.writer.writeAll(slice);
+                    continue;
+                }
+            },
+            .number => {},
+            .partial_string => |slice| {
+                if (in_string) {
+                    // reach escape char
+                    if (slice[0] != '\\') return std.json.Error.SyntaxError;
+                    try zon_writer.writer.writeAll(slice);
+                    continue;
+                }
+            },
+            .partial_string_escaped_1 => |c1| {
+                if (in_string) {
+                    const escaped = switch (c1[0]) {
+                        '\t' => "\\t",
+                        // TODO backspace char?
+                        //'b' => "\\b",
+                        // TODO form  char?
+                        //'\f' => "\\f",
+                        '\n' => "\\n",
+                        '\r' => "\\r",
+                        '\\' => "\\\\",
+                        '\"' => "\\\"",
+                        else => unreachable,
+                    };
+                    try zon_writer.writer.writeAll(escaped);
+                    continue;
+                }
+            },
+            .partial_string_escaped_2 => |c2| {
+                _ = c2; // autofix
+                unreachable("TODO impl");
+            },
+            .partial_string_escaped_3 => |c3| {
+                _ = c3; // autofix
+                unreachable("TODO impl");
+            },
+            .partial_string_escaped_4 => |c4| {
+                _ = c4; // autofix
+                unreachable("TODO impl");
+            },
+            .string => |slice| {
+                if (in_string) {
+                    switch (slice[0]) {
+                        '\"', '\\' => {
+                            // bug with escape " of json reader?
+                            try zon_writer.writer.writeByte('\\');
+                        },
+                        else => {},
+                    }
+                    try zon_writer.writer.writeAll(slice);
+                    continue;
+                }
+            },
+            .end_of_document => break,
+            else => {
+                std.debug.print("\n unimpl token {any}\n", .{token});
+                unreachable;
+            },
+        }
+
+        if (!in_string and !in_number and zon_stack.items.len > 0)
+            // TODO a getlastmut in std TODO try getlast and try to make
+            // sense of copy rule
+            switch (zon_stack.items[zon_stack.items.len - 1]) {
+                .@"struct" => {
+                    reading_buff_key = true;
+                },
+                .tuple => |*t| {
+                    // state on container is wrong and not needed
+                    try t.fieldPrefix();
+                },
+                .free => {},
             };
         switch (token) {
             .object_begin => {
@@ -73,45 +195,25 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 const new_arr = try zon_writer.beginTuple(.{ .whitespace_style = .{ .wrap = opts.indent } });
                 try zon_stack.append(alloc, .{ .tuple = new_arr });
             },
-            .object_end => {
-                if (zon_stack.pop()) |*last| {
-                    // TODO lib error
-                    if (last.* != .@"struct")
-                        return std.json.Error.SyntaxError;
-                    // TODO end fn should be on const in the first place
-                    try @constCast(&last.@"struct").end();
-                    // TODO lib error
-                } else return std.json.Error.SyntaxError;
-            },
-            .array_end => {
-                if (zon_stack.pop()) |*last| {
-                    if (last.* != .tuple)
-                        return std.json.Error.SyntaxError;
-                    try @constCast(&last.tuple).end();
-                } else return std.json.Error.SyntaxError;
-            },
+            .object_end => unreachable,
+            .array_end => unreachable,
             .partial_number => |slice| {
-                // TODO validate number ?  would need number buffer
-                // zon nb supposedly same as json?
                 try zon_writer.writer.writeAll(slice);
             },
             .number => |n| {
                 try zon_writer.writer.writeAll(n);
             },
             .partial_string => |slice| {
-                if (!in_string) {
-                    //if (slice[0] != '\"') return std.json.Error.SyntaxError;
-                    try zon_writer.writer.writeByte('\"');
-                    in_string = true;
-                } else {
-                    // reach escape char
-                    if (slice[0] != '\\') return std.json.Error.SyntaxError;
-                }
+                if (reading_buff_key) unreachable("unimplemented, should just refactor all serializer");
+                //if (slice[0] != '\"') return std.json.Error.SyntaxError;
+                try zon_writer.writer.writeByte('\"');
+                in_string = true;
                 try zon_writer.writer.writeAll(slice);
-                std.debug.print("<{s}>", .{slice});
-                std.debug.print("{any}", .{slice});
+                //   std.debug.print("<{s}>", .{slice});
+                //  std.debug.print("{any}", .{slice});
             },
             .partial_string_escaped_1 => |c1| {
+                if (reading_buff_key) unreachable("unimplemented, should just refactor all serializer");
                 const escaped = switch (c1[0]) {
                     '\t' => "\\t",
                     // TODO backspace char?
@@ -139,21 +241,14 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 unreachable("TODO impl");
             },
             .string => |slice| {
-                if (in_string) {
-                    switch (slice[0]) {
-                        '\"', '\\' => {
-                            // bug with escape " of json reader?
-                            try zon_writer.writer.writeByte('\\');
-                        },
-                        else => {},
-                    }
-                    try zon_writer.writer.writeAll(slice);
-                    continue;
+                if (reading_buff_key) {
+                    try zon_stack.items[zon_stack.items.len - 1].@"struct".fieldPrefix(slice);
+                    reading_buff_key = false;
+                } else {
+                    try zon_writer.string(slice);
                 }
-                std.debug.print("|{s}|", .{slice});
-                try zon_writer.string(slice);
             },
-            .end_of_document => break,
+            .end_of_document => unreachable,
             else => {
                 std.debug.print("\n unimpl token {any}\n", .{token});
                 unreachable;
@@ -195,6 +290,8 @@ test "json_to_zon" {
         .{ "\"a\\rc\"", "\"a\\rc\"" },
         // TODO ? don't relly want to buffer string.
         //.{ "\"hello\"", "hello" },
+        .{ "[1, 2]", ".{1,2}" },
+        .{ "{ \"a\": 1, \"bb\": 2 }", ".{.a=1,.bb=2}" },
     };
 
     inline for (tests) |t| {
