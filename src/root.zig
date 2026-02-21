@@ -53,6 +53,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
         };
         if (in_string)
             switch (token) {
+                // TODO std should not return string after a partial string...
                 .string, .partial_string, .partial_string_escaped_1, .partial_string_escaped_2, .partial_string_escaped_3, .partial_string_escaped_4 => {},
                 else => {
                     in_string = false;
@@ -111,8 +112,19 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 std.debug.print("{any}", .{slice});
             },
             .partial_string_escaped_1 => |c1| {
-                _ = c1; // autofix
-                unreachable("TODO impl");
+                const escaped = switch (c1[0]) {
+                    '\t' => "\\t",
+                    // TODO backspace char?
+                    //'b' => "\\b",
+                    // TODO form  char?
+                    //'\f' => "\\f",
+                    '\n' => "\\n",
+                    '\r' => "\\r",
+                    '\\' => "\\\\",
+                    '\"' => "\\\"",
+                    else => unreachable,
+                };
+                try zon_writer.writer.writeAll(escaped);
             },
             .partial_string_escaped_2 => |c2| {
                 _ = c2; // autofix
@@ -128,9 +140,13 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             },
             .string => |slice| {
                 if (in_string) {
-                    if (slice[0] != '\"') return std.json.Error.SyntaxError;
-                    // bug with escape " of json reader?
-                    try zon_writer.writer.writeByte('\\');
+                    switch (slice[0]) {
+                        '\"', '\\' => {
+                            // bug with escape " of json reader?
+                            try zon_writer.writer.writeByte('\\');
+                        },
+                        else => {},
+                    }
                     try zon_writer.writer.writeAll(slice);
                     continue;
                 }
@@ -174,6 +190,9 @@ test "json_to_zon" {
         .{ "\" hello, world\"", "\" hello, world\"" },
         .{ "\"\\\"hello\"", "\"\\\"hello\"" },
         .{ "\" \\\"hello\"", "\" \\\"hello\"" },
+        .{ "\"a\\\\b\"", "\"a\\\\b\"" },
+        .{ "\"a\\tb\"", "\"a\\tb\"" },
+        .{ "\"a\\rc\"", "\"a\\rc\"" },
         // TODO ? don't relly want to buffer string.
         //.{ "\"hello\"", "hello" },
     };
