@@ -6,6 +6,7 @@ const ArrayList = std.ArrayList;
 // TODO split between comptime and non comptime (allow both defs depending on small or large build).
 pub const Options = struct {
     indent: bool = true,
+    // TODO encoder sort keys ? (need crazy buf)
 };
 
 const ZonContext = union(enum) {
@@ -29,6 +30,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
 
     var zon_stack: ZonStack = try .initCapacity(alloc, zon_stack_capacity);
     defer zon_stack.deinit(alloc);
+    var in_string = false;
     // TODO just a ScannerReader struct here ?
     scanner.feedInput(reader.buffered());
     reader.tossBuffered();
@@ -40,7 +42,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                         if (zon_stack.items.len > 0)
                             return std.json.Error.SyntaxError;
                         // end of stream
-                        return;
+                        break;
                     },
                     else => return e,
                 };
@@ -49,6 +51,14 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             },
             else => return e,
         };
+        if (in_string)
+            switch (token) {
+                .string, .partial_string, .partial_string_escaped_1, .partial_string_escaped_2, .partial_string_escaped_3, .partial_string_escaped_4 => {},
+                else => {
+                    in_string = false;
+                    try zon_writer.writer.writeByte('\"');
+                },
+            };
         switch (token) {
             .object_begin => {
                 // TODO dyn wrap from our options?
@@ -57,6 +67,10 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 // should use comptime struct everywhere and only stack enum actually. (api is misleading should redisign
                 // std). (just need to set back serializer)
                 try zon_stack.append(alloc, .{ .@"struct" = new_struct });
+            },
+            .array_begin => {
+                const new_arr = try zon_writer.beginTuple(.{ .whitespace_style = .{ .wrap = opts.indent } });
+                try zon_stack.append(alloc, .{ .tuple = new_arr });
             },
             .object_end => {
                 if (zon_stack.pop()) |*last| {
@@ -68,9 +82,61 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                     // TODO lib error
                 } else return std.json.Error.SyntaxError;
             },
-            //.partial_number => {
-            //},
-
+            .array_end => {
+                if (zon_stack.pop()) |*last| {
+                    if (last.* != .tuple)
+                        return std.json.Error.SyntaxError;
+                    try @constCast(&last.tuple).end();
+                } else return std.json.Error.SyntaxError;
+            },
+            .partial_number => |slice| {
+                // TODO validate number ?  would need number buffer
+                // zon nb supposedly same as json?
+                try zon_writer.writer.writeAll(slice);
+            },
+            .number => |n| {
+                try zon_writer.writer.writeAll(n);
+            },
+            .partial_string => |slice| {
+                if (!in_string) {
+                    //if (slice[0] != '\"') return std.json.Error.SyntaxError;
+                    try zon_writer.writer.writeByte('\"');
+                    in_string = true;
+                } else {
+                    // reach escape char
+                    if (slice[0] != '\\') return std.json.Error.SyntaxError;
+                }
+                try zon_writer.writer.writeAll(slice);
+                std.debug.print("<{s}>", .{slice});
+                std.debug.print("{any}", .{slice});
+            },
+            .partial_string_escaped_1 => |c1| {
+                _ = c1; // autofix
+                unreachable("TODO impl");
+            },
+            .partial_string_escaped_2 => |c2| {
+                _ = c2; // autofix
+                unreachable("TODO impl");
+            },
+            .partial_string_escaped_3 => |c3| {
+                _ = c3; // autofix
+                unreachable("TODO impl");
+            },
+            .partial_string_escaped_4 => |c4| {
+                _ = c4; // autofix
+                unreachable("TODO impl");
+            },
+            .string => |slice| {
+                if (in_string) {
+                    if (slice[0] != '\"') return std.json.Error.SyntaxError;
+                    // bug with escape " of json reader?
+                    try zon_writer.writer.writeByte('\\');
+                    try zon_writer.writer.writeAll(slice);
+                    continue;
+                }
+                std.debug.print("|{s}|", .{slice});
+                try zon_writer.string(slice);
+            },
             .end_of_document => break,
             else => {
                 std.debug.print("\n unimpl token {any}\n", .{token});
@@ -78,11 +144,46 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             },
         }
     }
+
+    if (in_string)
+        try zon_writer.writer.writeByte('\"');
     return;
 }
 
-test "empty" {
-    const json = "{}";
+test "json_to_zon" {
+    const tests = .{
+        .{ "{}", ".{}" },
+        .{ "[]", ".{}" },
+        .{ "0", "0" },
+        .{ "-23", "-23" },
+        .{ "1333.192", "1333.192" },
+        .{ "-1333.192", "-1333.192" },
+        // TODO implement those
+        //.{ "1.0", "1" },
+        //.{ "1.10", "1.1" },
+        //.{ "1e6", "1000000" },
+        //.{ "1E6", "1000000" },
+        //.{ "1e-3", "0.001" },
+        //.{ "1E-3", "0.001" },
+        // TODO test error json read.
+        //.{ "007", "7" },
+        // TODO std json handling of NaN and Infinities
+        //.{ "NaN", "null" },
+        //.{ "Infinity", "null" },
+        //.{ "-Infinity", "null" },
+        .{ "\" hello, world\"", "\" hello, world\"" },
+        .{ "\"\\\"hello\"", "\"\\\"hello\"" },
+        .{ "\" \\\"hello\"", "\" \\\"hello\"" },
+        // TODO ? don't relly want to buffer string.
+        //.{ "\"hello\"", "hello" },
+    };
+
+    inline for (tests) |t| {
+        testJsonToZon(t[0], t[1]) catch unreachable;
+    }
+}
+
+fn testJsonToZon(json: []const u8, expected: []const u8) !void {
     const alloc = std.testing.allocator;
     var read_stream = std.Io.Reader.fixed(json);
     var out_stream = std.Io.Writer.Allocating.initCapacity(alloc, json.len) catch unreachable;
@@ -93,5 +194,5 @@ test "empty" {
     }) catch unreachable;
     const zon = out_stream.toOwnedSlice() catch unreachable;
     defer alloc.free(zon);
-    try std.testing.expectEqualSlices(u8, ".{}", zon);
+    try std.testing.expectEqualSlices(u8, expected, zon);
 }
