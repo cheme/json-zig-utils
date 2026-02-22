@@ -39,10 +39,10 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
     var reading_buff_key = false;
     // TODO just a ScannerReader struct here ?
     scanner.feedInput(reader.buffered());
-    reader.tossBuffered();
     while (true) {
         const token = scanner.next() catch |e| switch (e) {
             error.BufferUnderrun => {
+                reader.tossBuffered();
                 reader.fillMore() catch switch (e) {
                     error.BufferUnderrun => {
                         if (zon_stack.items.len > 0)
