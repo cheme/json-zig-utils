@@ -114,7 +114,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             .partial_string => |slice| {
                 if (in_string) {
                     // reach escape char
-                    if (slice[0] != '\\') return std.json.Error.SyntaxError;
+                    // if (slice[0] != '\\') return std.json.Error.SyntaxError;
                     try zon_writer.writer.writeAll(slice);
                     continue;
                 }
@@ -155,11 +155,11 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                         '\"', '\\' => {
                             // bug with escape " of json reader?
                             try zon_writer.writer.writeByte('\\');
+                            try zon_writer.writer.writeAll(slice);
+                            continue;
                         },
                         else => {},
                     }
-                    try zon_writer.writer.writeAll(slice);
-                    continue;
                 }
             },
             .end_of_document => break,
@@ -263,6 +263,14 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
 
 test "json_to_zon" {
     const tests = .{
+        .{
+            \\[
+            \\"/* \"Software\"), to deal in the Software without restriction, including    */", 
+            \\"/* without limitation the rights to use, copy, modify, merge, publish,    */",
+            \\]
+            ,
+            "a",
+        },
         .{ "{}", ".{}" },
         .{ "[]", ".{}" },
         .{ "0", "0" },
