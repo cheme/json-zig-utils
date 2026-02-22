@@ -34,8 +34,9 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
     var in_number = false;
     //    // needing this buff is so bad, but we have to check for invalid keys or escape needed key.
     //    // should just read ahead tbh.
-    //    var buff_key: ArrayList(u8) = try .initCapacity(alloc, 128);
-    //    defer buff_key.deinit(alloc);
+
+    var buff_key: std.Io.Writer.Allocating = try .initCapacity(alloc, 128);
+    defer buff_key.deinit();
     var reading_buff_key = false;
     // TODO just a ScannerReader struct here ?
     scanner.feedInput(reader.buffered());
@@ -158,6 +159,8 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                     continue;
                 }
             },
+            .false => {},
+            .true => {},
             .end_of_document => break,
             else => {
                 std.debug.print("\n unimpl token {any}\n", .{token});
@@ -201,7 +204,13 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 try zon_writer.writer.writeAll(n);
             },
             .partial_string => |slice| {
-                if (reading_buff_key) unreachable("unimplemented, should just refactor all serializer");
+                if (reading_buff_key) {
+                    try jsonKeyToBuff(slice, &scanner, reader, &buff_key.writer);
+
+                    try zon_stack.items[zon_stack.items.len - 1].@"struct".fieldPrefix(buff_key.writer.buffered());
+                    _ = buff_key.writer.consumeAll();
+                    continue;
+                }
                 //if (slice[0] != '\"') return std.json.Error.SyntaxError;
 
                 try zon_writer.writer.print("\"{f}", .{std.zig.fmtString(slice)});
@@ -245,6 +254,14 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                     try zon_writer.string(slice);
                 }
             },
+            .false => {
+                try zon_writer.writer.writeByte('F');
+                continue;
+            },
+            .true => {
+                try zon_writer.writer.writeByte('T');
+                continue;
+            },
             .end_of_document => unreachable,
             else => {
                 std.debug.print("\n unimpl token {any}\n", .{token});
@@ -256,6 +273,39 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
     if (in_string)
         try zon_writer.writer.writeByte('\"');
     return;
+}
+
+fn jsonKeyToBuff(start_partial: []const u8, scanner: *std.json.Scanner, reader: *std.Io.Reader, writer: *std.Io.Writer) !void {
+    try writer.writeAll(start_partial);
+    while (true) {
+        const token = scanner.next() catch |e| switch (e) {
+            error.BufferUnderrun => {
+                reader.tossBuffered();
+                reader.fillMore() catch switch (e) {
+                    error.BufferUnderrun => {
+                        // end of stream
+                        return std.json.Error.SyntaxError;
+                    },
+                    else => return e,
+                };
+                scanner.feedInput(reader.buffered());
+                continue;
+            },
+            else => return e,
+        };
+        switch (token) {
+            .partial_string => |slice| try writer.writeAll(slice),
+            .partial_string_escaped_1 => |c1| try writer.writeAll(&c1),
+            .partial_string_escaped_2 => |c2| try writer.writeAll(&c2),
+            .partial_string_escaped_3 => |c3| try writer.writeAll(&c3),
+            .partial_string_escaped_4 => |c4| try writer.writeAll(&c4),
+            .string => |s| {
+                try writer.writeAll(s);
+                return;
+            },
+            else => return std.json.Error.SyntaxError,
+        }
+    }
 }
 
 test "json_to_zon" {
