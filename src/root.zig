@@ -115,7 +115,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 if (in_string) {
                     // reach escape char
                     // if (slice[0] != '\\') return std.json.Error.SyntaxError;
-                    try zon_writer.writer.writeAll(slice);
+                    try zon_writer.writer.print("{f}", .{std.zig.fmtString(slice)});
                     continue;
                 }
             },
@@ -149,17 +149,13 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 _ = c4; // autofix
                 unreachable("TODO impl");
             },
-            .string => |slice| {
+            .string => |s| {
                 if (in_string) {
-                    switch (slice[0]) {
-                        '\"', '\\' => {
-                            // bug with escape " of json reader?
-                            try zon_writer.writer.writeByte('\\');
-                            try zon_writer.writer.writeAll(slice);
-                            continue;
-                        },
-                        else => {},
-                    }
+
+                    // partial ending on string
+                    try zon_writer.writer.print("{f}\"", .{std.zig.fmtString(s)});
+                    in_string = false;
+                    continue;
                 }
             },
             .end_of_document => break,
@@ -182,6 +178,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 },
                 .free => {},
             };
+
         switch (token) {
             .object_begin => {
                 // TODO dyn wrap from our options?
@@ -206,9 +203,9 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             .partial_string => |slice| {
                 if (reading_buff_key) unreachable("unimplemented, should just refactor all serializer");
                 //if (slice[0] != '\"') return std.json.Error.SyntaxError;
-                try zon_writer.writer.writeByte('\"');
+
+                try zon_writer.writer.print("\"{f}", .{std.zig.fmtString(slice)});
                 in_string = true;
-                try zon_writer.writer.writeAll(slice);
                 //   std.debug.print("<{s}>", .{slice});
                 //  std.debug.print("{any}", .{slice});
             },
@@ -264,12 +261,14 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
 test "json_to_zon" {
     const tests = .{
         .{
-            \\[
-            \\"/* \"Software\"), to deal in the Software without restriction, including    */", 
-            \\"/* without limitation the rights to use, copy, modify, merge, publish,    */",
-            \\]
+            \\"test \tSo"
             ,
-            "a",
+            \\"test \tSo"
+        },
+        .{
+            \\"test \"So"
+            ,
+            \\"test \"So"
         },
         .{ "{}", ".{}" },
         .{ "[]", ".{}" },
