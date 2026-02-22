@@ -174,7 +174,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             // sense of copy rule
             switch (zon_stack.items[zon_stack.items.len - 1]) {
                 .@"struct" => {
-                    reading_buff_key = true;
+                    reading_buff_key = !reading_buff_key;
                 },
                 .tuple => |*t| {
                     // state on container is wrong and not needed
@@ -243,7 +243,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             .string => |slice| {
                 if (reading_buff_key) {
                     try zon_stack.items[zon_stack.items.len - 1].@"struct".fieldPrefix(slice);
-                    reading_buff_key = false;
+                    //reading_buff_key = false;
                 } else {
                     try zon_writer.string(slice);
                 }
@@ -292,6 +292,7 @@ test "json_to_zon" {
         //.{ "\"hello\"", "hello" },
         .{ "[1, 2]", ".{1,2}" },
         .{ "{ \"a\": 1, \"bb\": 2 }", ".{.a=1,.bb=2}" },
+        .{ "{ \"a\": \"aa\", \"bb\": \"bbb\" }", ".{.a=\"aa\",.bb=\"bbb\"}" },
     };
 
     inline for (tests) |t| {

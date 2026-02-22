@@ -31,6 +31,8 @@ pub fn build(b: *std.Build) void {
     });
 
     b.installArtifact(exe);
+    // add test to zig-out for debugging (zig build to install).
+    b.installArtifact(mod_tests);
 
     const run_step = b.step("run", "Run the app");
 
