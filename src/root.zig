@@ -75,6 +75,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             };
         if (in_number)
             switch (token) {
+                // TODO partial number seems to not end field
                 .partial_number => {},
                 else => {
                     in_number = false;
