@@ -255,11 +255,11 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 }
             },
             .false => {
-                try zon_writer.writer.writeByte('F');
+                try zon_writer.writer.writeAll("false");
                 continue;
             },
             .true => {
-                try zon_writer.writer.writeByte('T');
+                try zon_writer.writer.writeAll("true");
                 continue;
             },
             .end_of_document => unreachable,
