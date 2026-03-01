@@ -41,22 +41,11 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
     // TODO just a ScannerReader struct here ?
     scanner.feedInput(reader.buffered());
     while (true) {
-        const token = scanner.next() catch |e| switch (e) {
-            error.BufferUnderrun => {
-                reader.tossBuffered();
-                reader.fillMore() catch switch (e) {
-                    error.BufferUnderrun => {
-                        if (zon_stack.items.len > 0)
-                            return std.json.Error.SyntaxError;
-                        // end of stream
-                        break;
-                    },
-                    else => return e,
-                };
-                scanner.feedInput(reader.buffered());
-                continue;
-            },
-            else => return e,
+        const token = try nextToken(&scanner, reader) orelse {
+            if (zon_stack.items.len > 0)
+                return std.json.Error.SyntaxError;
+            // end of stream
+            break;
         };
         if (in_string)
             switch (token) {
@@ -207,13 +196,14 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             .partial_number => |slice| {
                 try zon_writer.writer.writeAll(slice);
                 in_number = true;
+                //try readSplitNumber(&scanner, reader, &buff_key.writer, slice);
             },
             .number => |n| {
                 try zon_writer.writer.writeAll(n);
             },
             .partial_string => |slice| {
                 if (reading_buff_key) {
-                    try jsonKeyToBuff(slice, &scanner, reader, &buff_key.writer);
+                    try readSplitJsonKey(&scanner, reader, &buff_key.writer, slice);
 
                     try zon_stack.items[zon_stack.items.len - 1].@"struct".fieldPrefix(buff_key.writer.buffered());
                     _ = buff_key.writer.consumeAll();
@@ -255,8 +245,6 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 unreachable("TODO impl");
             },
             .string => |slice| {
-                if (std.mem.eql(u8, "KEY_F21", slice))
-                    std.debug.print("a1", .{});
                 if (reading_buff_key) {
                     try zon_stack.items[zon_stack.items.len - 1].@"struct".fieldPrefix(slice);
                     //reading_buff_key = false;
@@ -285,23 +273,48 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
     return;
 }
 
-fn jsonKeyToBuff(start_partial: []const u8, scanner: *std.json.Scanner, reader: *std.Io.Reader, writer: *std.Io.Writer) !void {
-    try writer.writeAll(start_partial);
+fn nextToken(scanner: *std.json.Scanner, reader: *std.Io.Reader) !?std.json.Token {
     while (true) {
         const token = scanner.next() catch |e| switch (e) {
             error.BufferUnderrun => {
                 reader.tossBuffered();
                 reader.fillMore() catch switch (e) {
-                    error.BufferUnderrun => {
-                        // end of stream
-                        return std.json.Error.SyntaxError;
-                    },
+                    error.BufferUnderrun => return null,
                     else => return e,
                 };
                 scanner.feedInput(reader.buffered());
                 continue;
             },
             else => return e,
+        };
+        return token;
+    }
+}
+
+fn readSplitNumber(scanner: *std.json.Scanner, reader: *std.Io.Reader, writer: *std.Io.Writer, start_number: []const u8) !void {
+    try writer.writeAll(start_number);
+    while (true) {
+        const token = try nextToken(scanner, reader) orelse {
+            // expect ending number
+            return std.json.Error.SyntaxError;
+        };
+        switch (token) {
+            .partial_number => |slice| try writer.writeAll(slice),
+            .number => |s| {
+                try writer.writeAll(s);
+                return;
+            },
+            else => return std.json.Error.SyntaxError,
+        }
+    }
+}
+
+fn readSplitJsonKey(scanner: *std.json.Scanner, reader: *std.Io.Reader, writer: *std.Io.Writer, start_partial: []const u8) !void {
+    try writer.writeAll(start_partial);
+    while (true) {
+        const token = try nextToken(scanner, reader) orelse {
+            // expect ending number
+            return std.json.Error.SyntaxError;
         };
         switch (token) {
             .partial_string => |slice| try writer.writeAll(slice),
