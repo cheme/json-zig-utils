@@ -47,8 +47,6 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
         };
 
         switch (token) {
-            .object_begin => {},
-            .array_begin => {},
             .object_end => {
                 if (zon_stack.pop()) |*last| {
                     // TODO lib error
@@ -68,21 +66,8 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 } else return std.json.Error.SyntaxError;
                 continue;
             },
-            .partial_number => {},
-            .number => {},
-            .partial_string => {},
-            .partial_string_escaped_1 => {},
-            .partial_string_escaped_2 => {},
-            .partial_string_escaped_3 => {},
-            .partial_string_escaped_4 => {},
-            .string => {},
-            .false => {},
-            .true => {},
             .end_of_document => break,
-            else => {
-                std.debug.print("\n unimpl token {any}\n", .{token});
-                unreachable;
-            },
+            else => {},
         }
 
         if (zon_stack.items.len > 0)
@@ -100,6 +85,8 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             };
 
         switch (token) {
+            .object_end => unreachable,
+            .array_end => unreachable,
             .object_begin => {
                 // TODO dyn wrap from our options?
                 const new_struct = try zon_writer.beginStruct(.{ .whitespace_style = .{ .wrap = opts.indent } });
@@ -112,8 +99,6 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 const new_arr = try zon_writer.beginTuple(.{ .whitespace_style = .{ .wrap = opts.indent } });
                 try zon_stack.append(alloc, .{ .tuple = new_arr });
             },
-            .object_end => unreachable,
-            .array_end => unreachable,
             .partial_number => |slice| {
                 try readSplitNumber(&scanner, reader, &zon_writer, slice);
             },
