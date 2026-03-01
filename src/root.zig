@@ -75,8 +75,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             };
         if (in_number)
             switch (token) {
-                // TODO partial number seems to not end field
-                .partial_number => {},
+                .number, .partial_number => {},
                 else => {
                     in_number = false;
                 },
@@ -112,7 +111,14 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                     continue;
                 }
             },
-            .number => {},
+            .number => |n| {
+                if (in_number) {
+                    // partial ending on number.
+                    try zon_writer.writer.writeAll(n);
+                    in_number = false;
+                    continue;
+                }
+            },
             .partial_string => |slice| {
                 if (in_string) {
                     // reach escape char
@@ -200,6 +206,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             .array_end => unreachable,
             .partial_number => |slice| {
                 try zon_writer.writer.writeAll(slice);
+                in_number = true;
             },
             .number => |n| {
                 try zon_writer.writer.writeAll(n);
@@ -248,6 +255,8 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 unreachable("TODO impl");
             },
             .string => |slice| {
+                if (std.mem.eql(u8, "KEY_F21", slice))
+                    std.debug.print("a1", .{});
                 if (reading_buff_key) {
                     try zon_stack.items[zon_stack.items.len - 1].@"struct".fieldPrefix(slice);
                     //reading_buff_key = false;
