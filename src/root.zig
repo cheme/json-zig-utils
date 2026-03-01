@@ -30,8 +30,6 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
 
     var zon_stack: ZonStack = try .initCapacity(alloc, zon_stack_capacity);
     defer zon_stack.deinit(alloc);
-    var in_string = false;
-    var in_number = false;
     //    // needing this buff is so bad, but we have to check for invalid keys or escape needed key.
     //    // should just read ahead tbh.
 
@@ -47,28 +45,6 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             // end of stream
             break;
         };
-        if (in_string)
-            switch (token) {
-                // TODO std should not return string after a partial string...
-                .string, .partial_string, .partial_string_escaped_1, .partial_string_escaped_2, .partial_string_escaped_3, .partial_string_escaped_4 => {},
-                else => {
-                    in_string = false;
-                    try zon_writer.writer.writeByte('\"');
-                    if (reading_buff_key) {
-                        if (reading_buff_key) unreachable("unimplemented, should just refactor all serializer");
-                        //        reading_buff_key = false;
-                        //        zon_stack.getLast().@"struct".fieldPrefix(buff_key.items);
-                        //        buff_key.clearRetainingCapacity();
-                    }
-                },
-            };
-        if (in_number)
-            switch (token) {
-                .number, .partial_number => {},
-                else => {
-                    in_number = false;
-                },
-            };
 
         switch (token) {
             .object_begin => {},
@@ -92,69 +68,14 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
                 } else return std.json.Error.SyntaxError;
                 continue;
             },
-            .partial_number => |slice| {
-                // TODO validate number ?  would need number buffer
-                // zon nb supposedly same as json?
-                if (in_number) {
-                    try zon_writer.writer.writeAll(slice);
-                    continue;
-                }
-            },
-            .number => |n| {
-                if (in_number) {
-                    // partial ending on number.
-                    try zon_writer.writer.writeAll(n);
-                    in_number = false;
-                    continue;
-                }
-            },
-            .partial_string => |slice| {
-                if (in_string) {
-                    // reach escape char
-                    // if (slice[0] != '\\') return std.json.Error.SyntaxError;
-                    try zon_writer.writer.print("{f}", .{std.zig.fmtString(slice)});
-                    continue;
-                }
-            },
-            .partial_string_escaped_1 => |c1| {
-                if (in_string) {
-                    const escaped = switch (c1[0]) {
-                        '\t' => "\\t",
-                        // TODO backspace char?
-                        //'b' => "\\b",
-                        // TODO form  char?
-                        //'\f' => "\\f",
-                        '\n' => "\\n",
-                        '\r' => "\\r",
-                        '\\' => "\\\\",
-                        '\"' => "\\\"",
-                        else => unreachable,
-                    };
-                    try zon_writer.writer.writeAll(escaped);
-                    continue;
-                }
-            },
-            .partial_string_escaped_2 => |c2| {
-                _ = c2; // autofix
-                unreachable("TODO impl");
-            },
-            .partial_string_escaped_3 => |c3| {
-                _ = c3; // autofix
-                unreachable("TODO impl");
-            },
-            .partial_string_escaped_4 => |c4| {
-                _ = c4; // autofix
-                unreachable("TODO impl");
-            },
-            .string => |s| {
-                if (in_string) {
-
-                    // partial ending on string
-                    try zon_writer.writer.print("{f}\"", .{std.zig.fmtString(s)});
-                    in_string = false;
-                    continue;
-                }
-            },
+            .partial_number => {},
+            .number => {},
+            .partial_string => {},
+            .partial_string_escaped_1 => {},
+            .partial_string_escaped_2 => {},
+            .partial_string_escaped_3 => {},
+            .partial_string_escaped_4 => {},
+            .string => {},
             .false => {},
             .true => {},
             .end_of_document => break,
@@ -164,7 +85,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             },
         }
 
-        if (!in_string and !in_number and zon_stack.items.len > 0)
+        if (zon_stack.items.len > 0)
             // TODO a getlastmut in std TODO try getlast and try to make
             // sense of copy rule
             switch (zon_stack.items[zon_stack.items.len - 1]) {
@@ -194,9 +115,7 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             .object_end => unreachable,
             .array_end => unreachable,
             .partial_number => |slice| {
-                try zon_writer.writer.writeAll(slice);
-                in_number = true;
-                //try readSplitNumber(&scanner, reader, &buff_key.writer, slice);
+                try readSplitNumber(&scanner, reader, &zon_writer, slice);
             },
             .number => |n| {
                 try zon_writer.writer.writeAll(n);
@@ -204,33 +123,16 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
             .partial_string => |slice| {
                 if (reading_buff_key) {
                     try readSplitJsonKey(&scanner, reader, &buff_key.writer, slice);
-
                     try zon_stack.items[zon_stack.items.len - 1].@"struct".fieldPrefix(buff_key.writer.buffered());
                     _ = buff_key.writer.consumeAll();
                     continue;
+                } else {
+                    try readSplitString(&scanner, reader, &zon_writer, slice);
                 }
-                //if (slice[0] != '\"') return std.json.Error.SyntaxError;
-
-                try zon_writer.writer.print("\"{f}", .{std.zig.fmtString(slice)});
-                in_string = true;
-                //   std.debug.print("<{s}>", .{slice});
-                //  std.debug.print("{any}", .{slice});
             },
             .partial_string_escaped_1 => |c1| {
                 if (reading_buff_key) unreachable("unimplemented, should just refactor all serializer");
-                const escaped = switch (c1[0]) {
-                    '\t' => "\\t",
-                    // TODO backspace char?
-                    //'b' => "\\b",
-                    // TODO form  char?
-                    //'\f' => "\\f",
-                    '\n' => "\\n",
-                    '\r' => "\\r",
-                    '\\' => "\\\\",
-                    '\"' => "\\\"",
-                    else => unreachable,
-                };
-                try zon_writer.writer.writeAll(escaped);
+                try readSplitString(&scanner, reader, &zon_writer, &c1);
             },
             .partial_string_escaped_2 => |c2| {
                 _ = c2; // autofix
@@ -268,8 +170,6 @@ pub fn jsonToZon(alloc: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.
         }
     }
 
-    if (in_string)
-        try zon_writer.writer.writeByte('\"');
     return;
 }
 
@@ -291,17 +191,68 @@ fn nextToken(scanner: *std.json.Scanner, reader: *std.Io.Reader) !?std.json.Toke
     }
 }
 
-fn readSplitNumber(scanner: *std.json.Scanner, reader: *std.Io.Reader, writer: *std.Io.Writer, start_number: []const u8) !void {
-    try writer.writeAll(start_number);
+fn readSplitNumber(scanner: *std.json.Scanner, reader: *std.Io.Reader, zon_ser: *std.zon.Serializer, start_partial: []const u8) !void {
+    try zon_ser.writer.writeAll(start_partial);
     while (true) {
         const token = try nextToken(scanner, reader) orelse {
-            // expect ending number
-            return std.json.Error.SyntaxError;
+            // no ending number on end of content, just return.
+            return;
         };
         switch (token) {
-            .partial_number => |slice| try writer.writeAll(slice),
+            .partial_number => |slice| try zon_ser.writer.writeAll(slice),
             .number => |s| {
-                try writer.writeAll(s);
+                try zon_ser.writer.writeAll(s);
+                return;
+            },
+            else => return std.json.Error.SyntaxError,
+        }
+    }
+}
+
+fn readSplitString(scanner: *std.json.Scanner, reader: *std.Io.Reader, zon_ser: *std.zon.Serializer, start_partial: []const u8) !void {
+    try zon_ser.writer.print("\"{f}", .{std.zig.fmtString(start_partial)});
+    while (true) {
+        const token = try nextToken(scanner, reader) orelse {
+            // no ending number on end of content, just return.
+            try zon_ser.writer.writeByte('\"');
+            return;
+        };
+        // TODO code from string above
+        switch (token) {
+            .partial_string => |slice| {
+                try zon_ser.writer.print("{f}", .{std.zig.fmtString(slice)});
+            },
+            .partial_string_escaped_1 => |c1| {
+                // TODO fmtString same?
+                const escaped = switch (c1[0]) {
+                    '\t' => "\\t",
+                    // TODO backspace char?
+                    //'b' => "\\b",
+                    // TODO form  char?
+                    //'\f' => "\\f",
+                    '\n' => "\\n",
+                    '\r' => "\\r",
+                    '\\' => "\\\\",
+                    '\"' => "\\\"",
+                    else => unreachable,
+                };
+                try zon_ser.writer.writeAll(escaped);
+            },
+            .partial_string_escaped_2 => |c2| {
+                _ = c2; // autofix
+                unreachable("TODO impl");
+            },
+            .partial_string_escaped_3 => |c3| {
+                _ = c3; // autofix
+                unreachable("TODO impl");
+            },
+            .partial_string_escaped_4 => |c4| {
+                _ = c4; // autofix
+                unreachable("TODO impl");
+            },
+            .string => |slice| {
+                try zon_ser.writer.print("{f}", .{std.zig.fmtString(slice)});
+                try zon_ser.writer.writeByte('\"');
                 return;
             },
             else => return std.json.Error.SyntaxError,
@@ -313,7 +264,7 @@ fn readSplitJsonKey(scanner: *std.json.Scanner, reader: *std.Io.Reader, writer: 
     try writer.writeAll(start_partial);
     while (true) {
         const token = try nextToken(scanner, reader) orelse {
-            // expect ending number
+            // expect ending string, end of stream is also wrong (key without value).
             return std.json.Error.SyntaxError;
         };
         switch (token) {
